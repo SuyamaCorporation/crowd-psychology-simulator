@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crowd Psychology Simulator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  canvas { border-radius: 8px; display: block; }
+</style>
+</head>
+<body class="bg-gray-950 text-white min-h-screen">
+<div class="max-w-5xl mx-auto p-4">
+  <h1 class="text-2xl font-bold text-center text-violet-400 mb-1">Crowd Psychology Simulator</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">Configure personality archetypes, trigger stimuli, discover tipping points</p>
+
+  <div class="flex flex-wrap gap-4 justify-center">
+    <div>
+      <canvas id="canvas" width="520" height="420" class="bg-gray-900"></canvas>
+      <div class="flex gap-3 mt-2 flex-wrap justify-center text-xs">
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full inline-block bg-yellow-400"></span>Leader</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full inline-block bg-green-400"></span>Conformist</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full inline-block bg-red-400"></span>Contrarian</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full inline-block bg-blue-400"></span>Follower</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded-full inline-block bg-gray-400"></span>Neutral</span>
+        <span class="ml-3 text-gray-500">Border = excited</span>
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-3 w-60">
+      <div class="bg-gray-800 rounded-xl p-4">
+        <h2 class="font-semibold text-violet-300 mb-3">Archetype Mix</h2>
+        <div class="space-y-2 text-sm">
+          <div>
+            <label class="flex justify-between text-yellow-400"><span>Leaders</span><span id="v-leader">10%</span></label>
+            <input type="range" id="r-leader" min="0" max="50" value="10" class="w-full accent-yellow-500">
+          </div>
+          <div>
+            <label class="flex justify-between text-green-400"><span>Conformists</span><span id="v-conform">30%</span></label>
+            <input type="range" id="r-conform" min="0" max="80" value="30" class="w-full accent-green-500">
+          </div>
+          <div>
+            <label class="flex justify-between text-red-400"><span>Contrarians</span><span id="v-contra">15%</span></label>
+            <input type="range" id="r-contra" min="0" max="50" value="15" class="w-full accent-red-500">
+          </div>
+          <div>
+            <label class="flex justify-between text-blue-400"><span>Followers</span><span id="v-follow">30%</span></label>
+            <input type="range" id="r-follow" min="0" max="80" value="30" class="w-full accent-blue-500">
+          </div>
+        </div>
+        <button onclick="respawnAgents()" class="mt-3 w-full bg-violet-700 hover:bg-violet-600 px-3 py-1.5 rounded text-sm">Respawn Crowd</button>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-4">
+        <h2 class="font-semibold text-violet-300 mb-3">Stimuli</h2>
+        <div class="space-y-2 text-sm">
+          <button onclick="triggerStimulus('alarm', 1.0)" class="w-full bg-red-700 hover:bg-red-600 px-3 py-1.5 rounded">🚨 Alarm (panic)</button>
+          <button onclick="triggerStimulus('cheer', 0.8)" class="w-full bg-green-700 hover:bg-green-600 px-3 py-1.5 rounded">🎉 Cheer (rally)</button>
+          <button onclick="triggerStimulus('rumor', 0.5)" class="w-full bg-yellow-700 hover:bg-yellow-600 px-3 py-1.5 rounded">💬 Rumor (spread)</button>
+          <button onclick="triggerStimulus('calm', -1.0)" class="w-full bg-blue-700 hover:bg-blue-600 px-3 py-1.5 rounded">🕊 Calm signal</button>
+        </div>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-4">
+        <h2 class="font-semibold text-violet-300 mb-2">Stats</h2>
+        <div class="space-y-1.5 text-xs">
+          <div class="flex justify-between"><span class="text-gray-400">Excited</span><span id="s-excited" class="text-orange-400 font-bold">-</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">Calm</span><span id="s-calm" class="text-blue-400 font-bold">-</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">Avg Excitement</span><span id="s-avg" class="text-violet-400 font-bold">-</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">Tipping Point</span><span id="s-tip" class="text-red-400 font-bold">-</span></div>
+          <div class="flex justify-between"><span class="text-gray-400">Cascade Events</span><span id="s-casc" class="text-yellow-400 font-bold">0</span></div>
+        </div>
+        <div id="event-log" class="mt-2 text-xs text-gray-500 space-y-0.5 max-h-20 overflow-y-auto"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const N = 120;
+let agents = [], tick = 0, cascadeCount = 0, lastTipState = false;
+
+const ARCH = {
+  leader:   { color: '#facc15', influenceRadius: 70, spreadRate: 0.15, selfDecay: 0.005 },
+  conform:  { color: '#4ade80', influenceRadius: 40, spreadRate: 0.08, selfDecay: 0.01 },
+  contra:   { color: '#f87171', influenceRadius: 40, spreadRate: -0.06, selfDecay: 0.008 },
+  follower: { color: '#60a5fa', influenceRadius: 30, spreadRate: 0.12, selfDecay: 0.015 },
+  neutral:  { color: '#9ca3af', influenceRadius: 25, spreadRate: 0.02, selfDecay: 0.02 },
+};
+
+function getRatios() {
+  const l = parseInt(document.getElementById('r-leader').value) / 100;
+  const c = parseInt(document.getElementById('r-conform').value) / 100;
+  const ct = parseInt(document.getElementById('r-contra').value) / 100;
+  const f = parseInt(document.getElementById('r-follow').value) / 100;
+  return { leader: l, conform: c, contra: ct, follower: f };
+}
+
+function respawnAgents() {
+  const ratios = getRatios();
+  agents = [];
+  const types = [];
+  const total = N;
+  let rem = total;
+  ['leader','conform','contra','follower'].forEach(t => {
+    const n = Math.round(ratios[t] * total);
+    for (let i = 0; i < n && agents.length < total; i++) types.push(t);
+  });
+  while (types.length < total) types.push('neutral');
+  types.slice(0, total).forEach(type => {
+    agents.push({
+      type, x: 20 + Math.random()*(W-40), y: 20 + Math.random()*(H-40),
+      vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2,
+      excitement: Math.random() * 0.2, alive: true
+    });
+  });
+  tick = 0; cascadeCount = 0;
+}
+
+function triggerStimulus(type, intensity) {
+  const cx = W/2 + (Math.random()-0.5)*100, cy = H/2 + (Math.random()-0.5)*100;
+  agents.forEach(a => {
+    const dist = Math.hypot(a.x - cx, a.y - cy);
+    const effect = intensity * Math.max(0, 1 - dist/200);
+    if (a.type === 'contra') a.excitement = Math.max(0, Math.min(1, a.excitement - effect * 0.5));
+    else a.excitement = Math.max(0, Math.min(1, a.excitement + effect));
+  });
+  addEvent(`Stimulus: ${type}`);
+}
+
+function update() {
+  tick++;
+  agents.forEach(a => {
+    const sp = ARCH[a.type];
+    // Movement
+    a.vx += (Math.random()-0.5)*0.3;
+    a.vy += (Math.random()-0.5)*0.3;
+    const spd = Math.hypot(a.vx, a.vy);
+    if (spd > 2.5) { a.vx *= 2.5/spd; a.vy *= 2.5/spd; }
+    a.x += a.vx; a.y += a.vy;
+    if (a.x < 5) { a.x = 5; a.vx *= -1; }
+    if (a.x > W-5) { a.x = W-5; a.vx *= -1; }
+    if (a.y < 5) { a.y = 5; a.vy *= -1; }
+    if (a.y > H-5) { a.y = H-5; a.vy *= -1; }
+
+    // Influence from neighbors
+    let influence = 0, count = 0;
+    agents.forEach(b => {
+      if (b === a) return;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (dist < sp.influenceRadius) {
+        const bSp = ARCH[b.type];
+        influence += b.excitement * bSp.spreadRate;
+        count++;
+      }
+    });
+    if (count > 0) {
+      a.excitement += influence / count * sp.spreadRate * 2;
+    }
+    // Self decay
+    a.excitement -= sp.selfDecay;
+    a.excitement = Math.max(0, Math.min(1, a.excitement));
+
+    // Excited agents move faster
+    if (a.excitement > 0.7) {
+      a.vx *= 1.05; a.vy *= 1.05;
+    }
+  });
+
+  // Check tipping point
+  const excitedCount = agents.filter(a => a.excitement > 0.6).length;
+  const tipRatio = excitedCount / agents.length;
+  const isTipping = tipRatio > 0.5;
+  if (isTipping && !lastTipState) {
+    cascadeCount++;
+    addEvent(`TIPPING POINT! ${Math.round(tipRatio*100)}% excited`);
+    document.getElementById('s-casc').textContent = cascadeCount;
+  }
+  lastTipState = isTipping;
+
+  drawFrame();
+  updateStats();
+}
+
+function drawFrame() {
+  ctx.fillStyle = '#030712';
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw influence halos for excited leaders
+  agents.filter(a => a.type === 'leader' && a.excitement > 0.5).forEach(a => {
+    const grad = ctx.createRadialGradient(a.x, a.y, 0, a.x, a.y, ARCH.leader.influenceRadius);
+    grad.addColorStop(0, `rgba(250,204,21,${a.excitement * 0.15})`);
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(a.x, a.y, ARCH.leader.influenceRadius, 0, Math.PI*2); ctx.fill();
+  });
+
+  agents.forEach(a => {
+    const sp = ARCH[a.type];
+    const r = 4 + a.excitement * 3;
+    ctx.beginPath(); ctx.arc(a.x, a.y, r, 0, Math.PI*2);
+    ctx.fillStyle = sp.color;
+    ctx.globalAlpha = 0.4 + a.excitement * 0.6;
+    ctx.fill();
+    if (a.excitement > 0.6) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = (a.excitement - 0.6) * 2;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  });
+}
+
+function updateStats() {
+  const excited = agents.filter(a => a.excitement > 0.6).length;
+  const calm = agents.filter(a => a.excitement < 0.2).length;
+  const avg = agents.reduce((s, a) => s + a.excitement, 0) / agents.length;
+  const tip = agents.filter(a => a.excitement > 0.6).length / agents.length;
+  document.getElementById('s-excited').textContent = `${excited} (${Math.round(excited/agents.length*100)}%)`;
+  document.getElementById('s-calm').textContent = `${calm} (${Math.round(calm/agents.length*100)}%)`;
+  document.getElementById('s-avg').textContent = avg.toFixed(3);
+  document.getElementById('s-tip').textContent = tip > 0.5 ? '🔴 YES' : `${Math.round(tip*100)}%`;
+}
+
+function addEvent(msg) {
+  const log = document.getElementById('event-log');
+  const d = document.createElement('div'); d.textContent = msg;
+  log.prepend(d);
+  while (log.children.length > 10) log.removeChild(log.lastChild);
+}
+
+['leader','conform','contra','follow'].forEach(id => {
+  document.getElementById('r-'+id).addEventListener('input', function() {
+    document.getElementById('v-'+id).textContent = this.value + '%';
+  });
+});
+
+respawnAgents();
+setInterval(update, 40);
+</script>
+</body>
+</html>
